@@ -1,6 +1,8 @@
 """Git operations for the configuration repository, implemented with GitPython."""
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Self
@@ -9,7 +11,7 @@ from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from git.objects.blob import Blob
 
-from configctl.exceptions import ConfigNotFound, InvalidRepoError
+from configctl.exceptions import BranchError, ConfigNotFound, InvalidRepoError
 
 DEFAULT_BRANCH = "main"
 
@@ -22,6 +24,28 @@ GITIGNORE_CONTENT = """\
 .DS_Store
 Thumbs.db
 """
+
+
+@dataclass(frozen=True)
+class CommitInfo:
+    """A short description of one commit.
+
+    Attributes:
+        sha: The full commit SHA.
+        message: The first line of the commit message.
+        author: The name of the commit author.
+        date: When the commit was made.
+    """
+
+    sha: str
+    message: str
+    author: str
+    date: datetime
+
+    @property
+    def short_sha(self) -> str:
+        """The first seven characters of the SHA, as Git usually shows it."""
+        return self.sha[:7]
 
 
 class GitRepository:
@@ -55,7 +79,8 @@ class GitRepository:
             The new repository.
 
         Raises:
-            InvalidRepoError: If a Git repository already exists at ``path``.
+            InvalidRepoError: If ``path`` already is, or is inside, a Git
+                repository.
         """
         enclosing = _find_enclosing_repository(path)
         if enclosing == path.resolve():
@@ -125,6 +150,71 @@ class GitRepository:
         """The name of the branch that is currently checked out."""
         return self._repo.active_branch.name
 
+    def is_dirty(self) -> bool:
+        """Return True if there are uncommitted or untracked changes."""
+        return self._repo.is_dirty(untracked_files=True)
+
+    def list_branches(self) -> list[str]:
+        """Return the names of all local branches, sorted alphabetically."""
+        return sorted(head.name for head in self._repo.heads)
+
+    def branch_exists(self, name: str) -> bool:
+        """Return True if a local branch with this name exists."""
+        return name in self.list_branches()
+
+    def create_branch(self, name: str, start_point: str = DEFAULT_BRANCH) -> None:
+        """Create a new branch without switching to it.
+
+        Args:
+            name: Name of the new branch, for example ``draft/timeout``.
+            start_point: The branch or commit the new branch starts from.
+
+        Raises:
+            BranchError: If a branch with this name already exists.
+        """
+        if self.branch_exists(name):
+            raise BranchError(f"Branch '{name}' already exists")
+        self._repo.create_head(name, start_point)
+
+    def checkout(self, name: str) -> None:
+        """Switch to an existing branch.
+
+        Args:
+            name: The branch to switch to.
+
+        Raises:
+            BranchError: If the branch does not exist or the repository has
+                uncommitted changes.
+        """
+        if not self.branch_exists(name):
+            raise BranchError(f"Branch '{name}' does not exist")
+        if self.is_dirty():
+            raise BranchError(
+                "Cannot switch branches: the repository has uncommitted changes"
+            )
+        self._repo.heads[name].checkout()
+
+    def merge(self, source: str, target: str, message: str) -> str:
+        """Merge one branch into another, always creating a merge commit.
+
+        Args:
+            source: The branch whose changes are merged.
+            target: The branch that receives the changes.
+            message: The merge commit message.
+
+        Returns:
+            The SHA of the new merge commit.
+
+        Raises:
+            BranchError: If a branch does not exist or the repository has
+                uncommitted changes.
+        """
+        if not self.branch_exists(source):
+            raise BranchError(f"Branch '{source}' does not exist")
+        self.checkout(target)
+        self._repo.git.merge(source, "--no-ff", "-m", message)
+        return self._repo.head.commit.hexsha
+
     def commit_files(self, relative_paths: Sequence[str], message: str) -> str:
         """Stage files and create a commit.
 
@@ -165,6 +255,26 @@ class GitRepository:
             )
         content: bytes = item.data_stream.read()
         return content.decode("utf-8")
+
+    def history(self, relative_path: str, revision: str = "HEAD") -> list[CommitInfo]:
+        """List the commits that changed a file, newest first.
+
+        Args:
+            relative_path: Path of the file, relative to ``root``.
+            revision: The branch or commit to start from.
+
+        Returns:
+            One entry per commit that changed the file. Empty if none did.
+        """
+        return [
+            CommitInfo(
+                sha=commit.hexsha,
+                message=str(commit.summary),
+                author=commit.author.name or "",
+                date=commit.committed_datetime,
+            )
+            for commit in self._repo.iter_commits(revision, paths=relative_path)
+        ]
 
 
 def _find_enclosing_repository(path: Path) -> Path | None:
