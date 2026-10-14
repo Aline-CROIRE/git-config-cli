@@ -24,6 +24,10 @@ class UnsupportedFormatError(ConfigCtlError):
     """Raised when a configuration file has an unsupported file extension."""
 
 
+class BranchError(ConfigCtlError):
+    """Raised when a branch operation cannot be performed."""
+
+
 class MergeConflictError(ConfigCtlError):
     """Raised when publishing a draft causes a merge conflict.
 
