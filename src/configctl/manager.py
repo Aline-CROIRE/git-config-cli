@@ -195,9 +195,11 @@ class ConfigManager:
         self._repo.checkout(branch)
         try:
             yield
-        finally:
+        except BaseException:
             if not self._repo.is_dirty():
                 self._repo.checkout(MAIN_BRANCH)
+            raise
+        self._repo.checkout(MAIN_BRANCH)
 
 
 def _set_nested(data: ConfigData, key: str, value: Any) -> None:
