@@ -8,7 +8,7 @@ from types import TracebackType
 from typing import Self
 
 from git import Repo
-from git.exc import InvalidGitRepositoryError, NoSuchPathError
+from git.exc import BadName, BadObject, InvalidGitRepositoryError, NoSuchPathError
 from git.objects.blob import Blob
 
 from configctl.exceptions import BranchError, ConfigNotFound, InvalidRepoError
@@ -242,7 +242,10 @@ class GitRepository:
         Raises:
             ConfigNotFound: If the file does not exist at that revision.
         """
-        commit = self._repo.commit(revision)
+        try:
+            commit = self._repo.commit(revision)
+        except (BadName, BadObject, ValueError):
+            raise ConfigNotFound(f"Revision '{revision}' was not found") from None
         try:
             item = commit.tree / relative_path
         except KeyError:
