@@ -57,8 +57,14 @@ class GitRepository:
         Raises:
             InvalidRepoError: If a Git repository already exists at ``path``.
         """
-        if (path / ".git").exists():
+        enclosing = _find_enclosing_repository(path)
+        if enclosing == path.resolve():
             raise InvalidRepoError(f"A Git repository already exists at {path}")
+        if enclosing is not None:
+            raise InvalidRepoError(
+                f"Cannot create a repository inside another Git repository "
+                f"({enclosing})"
+            )
         path.mkdir(parents=True, exist_ok=True)
         repository = cls(Repo.init(path, initial_branch=DEFAULT_BRANCH))
         (path / ".gitignore").write_text(
@@ -159,3 +165,12 @@ class GitRepository:
             )
         content: bytes = item.data_stream.read()
         return content.decode("utf-8")
+
+
+def _find_enclosing_repository(path: Path) -> Path | None:
+    """Return the folder of a Git repository that contains ``path``, if any."""
+    resolved = path.resolve()
+    for folder in (resolved, *resolved.parents):
+        if (folder / ".git").exists():
+            return folder
+    return None

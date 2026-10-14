@@ -92,3 +92,10 @@ def test_read_folder_raises_config_not_found(config_repo: GitRepository) -> None
 
     with pytest.raises(ConfigNotFound, match="not a file"):
         config_repo.read_file("nested")
+
+
+def test_init_refuses_folder_inside_another_repository(tmp_path: Path) -> None:
+    Repo.init(tmp_path / "outer").close()
+
+    with pytest.raises(InvalidRepoError, match="inside another Git repository"):
+        GitRepository.init(tmp_path / "outer" / "inner")
