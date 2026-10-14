@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from configctl.config_parser import ConfigData
-from configctl.exceptions import BranchError, ConfigNotFound, InvalidConfigError
+from configctl.exceptions import (
+    BranchError,
+    ConfigNotFound,
+    InvalidConfigError,
+    UnsupportedFormatError,
+)
 from configctl.git_repository import CommitInfo
 from configctl.protocols import ConfigFormat, VersionControl
 
@@ -113,6 +118,10 @@ class ConfigManager:
     def publish(self, draft: str) -> str:
         """Publish a draft by merging it into ``main``.
 
+        Every configuration file the draft changed is parsed first, so a draft
+        with invalid JSON or YAML (for example, leftover conflict markers) is
+        never published.
+
         Args:
             draft: The draft name.
 
@@ -121,8 +130,11 @@ class ConfigManager:
 
         Raises:
             BranchError: If the draft does not exist.
+            InvalidConfigError: If a changed configuration file is invalid.
+            MergeConflictError: If the draft conflicts with ``main``.
         """
         branch = self._existing_draft(draft)
+        self._validate_draft(draft, branch)
         return self._repo.merge(branch, MAIN_BRANCH, f"Publish {branch}")
 
     def history(self, filename: str) -> list[CommitInfo]:
@@ -159,6 +171,18 @@ class ConfigManager:
             return self._repo.commit_files(
                 [filename], f"Rollback {filename} to {revision}"
             )
+
+    def _validate_draft(self, draft: str, branch: str) -> None:
+        """Raise InvalidConfigError if a config file changed on the draft is invalid."""
+        for filename in self._repo.changed_files(branch, MAIN_BRANCH):
+            try:
+                self._parser.parse(self._repo.read_file(filename, branch), filename)
+            except UnsupportedFormatError:
+                continue
+            except InvalidConfigError as error:
+                raise InvalidConfigError(
+                    f"Draft '{draft}' cannot be published. {error}"
+                ) from error
 
     def _existing_draft(self, draft: str) -> str:
         """Return the draft's branch name, checking that it exists."""

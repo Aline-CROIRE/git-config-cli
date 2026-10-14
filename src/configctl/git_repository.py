@@ -303,6 +303,23 @@ class GitRepository:
             for commit in self._repo.iter_commits(revision, paths=relative_path)
         ]
 
+    def changed_files(self, source: str, target: str) -> list[str]:
+        """List files added or modified on ``source`` since it left ``target``.
+
+        Deleted files are not included, because there is nothing to read.
+
+        Args:
+            source: The branch with the changes, for example a draft.
+            target: The branch it was created from, usually ``main``.
+
+        Returns:
+            The changed file paths, sorted.
+        """
+        output: str = self._repo.git.diff(
+            "--name-only", "--diff-filter=d", f"{target}...{source}"
+        )
+        return sorted(output.splitlines())
+
     def _conflicted_files(self) -> list[str]:
         """Return the files Git marked as conflicted during a merge."""
         output: str = self._repo.git.diff("--name-only", "--diff-filter=U")

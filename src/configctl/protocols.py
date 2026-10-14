@@ -49,6 +49,9 @@ class VersionControl(Protocol):
     def merge(self, source: str, target: str, message: str) -> str:
         """Merge one branch into another and return the merge commit SHA."""
 
+    def changed_files(self, source: str, target: str) -> list[str]:
+        """List files added or modified on source since it left target."""
+
     def commit_files(self, relative_paths: Sequence[str], message: str) -> str:
         """Stage files, commit them, and return the commit SHA."""
 
