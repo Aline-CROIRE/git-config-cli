@@ -28,6 +28,10 @@ class BranchError(ConfigCtlError):
     """Raised when a branch operation cannot be performed."""
 
 
+class RemoteError(ConfigCtlError):
+    """Raised when talking to a remote repository fails."""
+
+
 class MergeConflictError(ConfigCtlError):
     """Raised when publishing a draft causes a merge conflict.
 

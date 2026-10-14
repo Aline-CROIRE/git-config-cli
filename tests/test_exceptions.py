@@ -9,6 +9,7 @@ from configctl.exceptions import (
     InvalidConfigError,
     InvalidRepoError,
     MergeConflictError,
+    RemoteError,
     UnsupportedFormatError,
 )
 
@@ -21,6 +22,7 @@ from configctl.exceptions import (
         InvalidConfigError,
         UnsupportedFormatError,
         BranchError,
+        RemoteError,
     ],
 )
 def test_simple_errors_inherit_from_base_error(
