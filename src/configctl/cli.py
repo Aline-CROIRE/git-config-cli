@@ -16,19 +16,33 @@ from configctl.manager import DRAFT_PREFIX, ConfigManager
 
 
 @contextmanager
-def _open_manager(repo_path: Path) -> Iterator[ConfigManager]:
-    """Open the repository, build a ConfigManager, and report errors cleanly.
-
-    This is the only place where the concrete classes are chosen (the
-    composition root); every command works through ConfigManager.
-    """
+def _reported_errors(repo_path: Path | None = None) -> Iterator[None]:
+    """Turn configctl errors into clean ``Error: ...`` messages for the user."""
     try:
-        with GitRepository.open(repo_path) as repo:
-            yield ConfigManager(repo, ConfigParser())
+        yield
     except MergeConflictError as error:
-        raise click.ClickException(_conflict_help(error, repo_path)) from error
+        help_text = _conflict_help(error, repo_path or Path("."))
+        raise click.ClickException(help_text) from error
     except ConfigCtlError as error:
         raise click.ClickException(str(error)) from error
+
+
+@contextmanager
+def _open_repository(repo_path: Path) -> Iterator[GitRepository]:
+    """Open the configuration repository, reporting errors cleanly."""
+    with _reported_errors(repo_path), GitRepository.open(repo_path) as repo:
+        yield repo
+
+
+@contextmanager
+def _open_manager(repo_path: Path) -> Iterator[ConfigManager]:
+    """Build a ConfigManager on the repository.
+
+    This is where the concrete classes are chosen (the composition root);
+    configuration commands work only through ConfigManager.
+    """
+    with _open_repository(repo_path) as repo:
+        yield ConfigManager(repo, ConfigParser())
 
 
 def _conflict_help(error: MergeConflictError, repo_path: Path) -> str:
@@ -79,15 +93,46 @@ def main(ctx: click.Context, repo_path: Path) -> None:
     ctx.obj = repo_path
 
 
+# --- Repository setup -------------------------------------------------------
+
+
 @main.command()
 @click.pass_obj
 def init(repo_path: Path) -> None:
     """Create a new configuration repository at the --repo folder."""
-    try:
-        with GitRepository.init(repo_path) as repo:
-            click.echo(f"Initialized configuration repository at {repo.root}")
-    except ConfigCtlError as error:
-        raise click.ClickException(str(error)) from error
+    with _reported_errors(repo_path), GitRepository.init(repo_path) as repo:
+        click.echo(f"Initialized configuration repository at {repo.root}")
+
+
+@main.command()
+@click.argument("url")
+@click.argument("destination", type=click.Path(file_okay=False, path_type=Path))
+def clone(url: str, destination: Path) -> None:
+    """Clone the configuration repository at URL into DESTINATION."""
+    with _reported_errors(destination), GitRepository.clone(url, destination) as repo:
+        click.echo(f"Cloned {url} into {repo.root}")
+
+
+@main.command()
+@click.argument("url")
+@click.pass_obj
+def remote(repo_path: Path, url: str) -> None:
+    """Set URL as the remote (origin) that push sends configurations to."""
+    with _open_repository(repo_path) as repo:
+        repo.set_remote(url)
+    click.echo(f"Remote 'origin' set to {url}")
+
+
+@main.command()
+@click.pass_obj
+def push(repo_path: Path) -> None:
+    """Push the published configurations on main to the remote."""
+    with _open_repository(repo_path) as repo:
+        repo.push()
+    click.echo("Pushed main to origin")
+
+
+# --- Configuration workflow -------------------------------------------------
 
 
 @main.command()
@@ -127,6 +172,16 @@ def show(repo_path: Path, filename: str, draft_name: str | None) -> None:
     """Print FILE as it is on main, or on a draft with --draft."""
     with _open_manager(repo_path) as manager:
         data = manager.show(filename, draft=draft_name)
+    click.echo(json.dumps(data, indent=2, sort_keys=True))
+
+
+@main.command(name="inspect")
+@click.argument("url")
+@click.argument("filename", metavar="FILE")
+def inspect_remote(url: str, filename: str) -> None:
+    """Print FILE from main of the repository at URL, without keeping a copy."""
+    with _reported_errors(), GitRepository.temporary_clone(url) as repo:
+        data = ConfigManager(repo, ConfigParser()).show(filename)
     click.echo(json.dumps(data, indent=2, sort_keys=True))
 
 

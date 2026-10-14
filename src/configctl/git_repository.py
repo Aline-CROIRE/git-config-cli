@@ -1,9 +1,11 @@
 """Git operations for the configuration repository, implemented with GitPython."""
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import TracebackType
 from typing import Self
 
@@ -22,9 +24,11 @@ from configctl.exceptions import (
     ConfigNotFound,
     InvalidRepoError,
     MergeConflictError,
+    RemoteError,
 )
 
 DEFAULT_BRANCH = "main"
+DEFAULT_REMOTE = "origin"
 
 GITIGNORE_CONTENT = """\
 # Files the configuration repository should never track
@@ -69,7 +73,7 @@ class GitRepository:
     def __init__(self, repo: Repo) -> None:
         """Wrap an existing GitPython repository.
 
-        Prefer the ``init`` and ``open`` class methods over calling this.
+        Prefer the ``init``, ``open`` and ``clone`` class methods over this.
 
         Args:
             repo: The GitPython repository to wrap.
@@ -133,6 +137,49 @@ class GitRepository:
             repo.close()
             raise InvalidRepoError(f"Repository at {path} has no working folder")
         return cls(repo)
+
+    @classmethod
+    def clone(cls, url: str, path: Path) -> Self:
+        """Clone a remote configuration repository into a new folder.
+
+        Args:
+            url: Address of the remote repository (a URL or a folder path).
+            path: Folder to clone into.
+
+        Returns:
+            The cloned repository.
+
+        Raises:
+            InvalidRepoError: If ``path`` is inside a Git repository or the
+                clone fails.
+        """
+        if _find_enclosing_repository(path) is not None:
+            raise InvalidRepoError(
+                f"Cannot clone into {path}: it is inside a Git repository"
+            )
+        try:
+            repo = Repo.clone_from(url, path)
+        except GitCommandError as error:
+            raise InvalidRepoError(f"Could not clone '{url}'") from error
+        return cls(repo)
+
+    @classmethod
+    @contextmanager
+    def temporary_clone(cls, url: str) -> Iterator[Self]:
+        """Clone into a temporary folder for a ``with`` block, then delete it.
+
+        Args:
+            url: Address of the remote repository (a URL or a folder path).
+
+        Yields:
+            The temporary clone. It is closed and deleted afterwards.
+
+        Raises:
+            InvalidRepoError: If the clone fails.
+        """
+        with TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            with cls.clone(url, Path(folder) / "repo") as repository:
+                yield repository
 
     def __enter__(self) -> Self:
         """Return the repository when entering a ``with`` block."""
@@ -319,6 +366,38 @@ class GitRepository:
             "--name-only", "--diff-filter=d", f"{target}...{source}"
         )
         return sorted(output.splitlines())
+
+    def set_remote(self, url: str, name: str = DEFAULT_REMOTE) -> None:
+        """Add a remote, or change its address if it already exists.
+
+        Args:
+            url: Address of the remote repository (a URL or a folder path).
+            name: Name of the remote.
+        """
+        if name in [remote.name for remote in self._repo.remotes]:
+            self._repo.remote(name).set_url(url)
+        else:
+            self._repo.create_remote(name, url)
+
+    def push(self, branch: str = DEFAULT_BRANCH, remote: str = DEFAULT_REMOTE) -> None:
+        """Send a branch to a remote repository.
+
+        Args:
+            branch: The branch to push.
+            remote: The name of the remote to push to.
+
+        Raises:
+            RemoteError: If the remote is not configured or the push fails.
+        """
+        if remote not in [item.name for item in self._repo.remotes]:
+            raise RemoteError(f"No remote named '{remote}' is configured")
+        try:
+            self._repo.git.push(remote, branch)
+        except GitCommandError as error:
+            raise RemoteError(
+                f"Could not push '{branch}' to '{remote}'. Check the remote "
+                "address and your connection, and pull any newer changes first."
+            ) from error
 
     def _conflicted_files(self) -> list[str]:
         """Return the files Git marked as conflicted during a merge."""
