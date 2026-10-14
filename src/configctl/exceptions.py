@@ -16,6 +16,14 @@ class InvalidRepoError(ConfigCtlError):
     """Raised when a path is not a valid configuration repository."""
 
 
+class InvalidConfigError(ConfigCtlError):
+    """Raised when a configuration file contains invalid or unexpected data."""
+
+
+class UnsupportedFormatError(ConfigCtlError):
+    """Raised when a configuration file has an unsupported file extension."""
+
+
 class MergeConflictError(ConfigCtlError):
     """Raised when publishing a draft causes a merge conflict.
 

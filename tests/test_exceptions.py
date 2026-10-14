@@ -5,12 +5,17 @@ import pytest
 from configctl.exceptions import (
     ConfigCtlError,
     ConfigNotFound,
+    InvalidConfigError,
     InvalidRepoError,
     MergeConflictError,
+    UnsupportedFormatError,
 )
 
 
-@pytest.mark.parametrize("error_class", [ConfigNotFound, InvalidRepoError])
+@pytest.mark.parametrize(
+    "error_class",
+    [ConfigNotFound, InvalidRepoError, InvalidConfigError, UnsupportedFormatError],
+)
 def test_simple_errors_inherit_from_base_error(
     error_class: type[ConfigCtlError],
 ) -> None:
