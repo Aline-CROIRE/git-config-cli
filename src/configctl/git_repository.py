@@ -8,10 +8,21 @@ from types import TracebackType
 from typing import Self
 
 from git import Repo
-from git.exc import BadName, BadObject, InvalidGitRepositoryError, NoSuchPathError
+from git.exc import (
+    BadName,
+    BadObject,
+    GitCommandError,
+    InvalidGitRepositoryError,
+    NoSuchPathError,
+)
 from git.objects.blob import Blob
 
-from configctl.exceptions import BranchError, ConfigNotFound, InvalidRepoError
+from configctl.exceptions import (
+    BranchError,
+    ConfigNotFound,
+    InvalidRepoError,
+    MergeConflictError,
+)
 
 DEFAULT_BRANCH = "main"
 
@@ -197,6 +208,9 @@ class GitRepository:
     def merge(self, source: str, target: str, message: str) -> str:
         """Merge one branch into another, always creating a merge commit.
 
+        If the branches conflict, the merge is aborted so ``target`` is left
+        exactly as it was, and the conflicting files are reported.
+
         Args:
             source: The branch whose changes are merged.
             target: The branch that receives the changes.
@@ -206,13 +220,23 @@ class GitRepository:
             The SHA of the new merge commit.
 
         Raises:
-            BranchError: If a branch does not exist or the repository has
-                uncommitted changes.
+            BranchError: If a branch does not exist, the repository has
+                uncommitted changes, or the merge fails for another reason.
+            MergeConflictError: If the branches change the same lines.
         """
         if not self.branch_exists(source):
             raise BranchError(f"Branch '{source}' does not exist")
         self.checkout(target)
-        self._repo.git.merge(source, "--no-ff", "-m", message)
+        try:
+            self._repo.git.merge(source, "--no-ff", "-m", message)
+        except GitCommandError as error:
+            conflicted = self._conflicted_files()
+            if not conflicted:
+                raise BranchError(
+                    f"Could not merge '{source}' into '{target}'"
+                ) from error
+            self._repo.git.merge("--abort")
+            raise MergeConflictError(source, conflicted) from error
         return self._repo.head.commit.hexsha
 
     def commit_files(self, relative_paths: Sequence[str], message: str) -> str:
@@ -240,7 +264,7 @@ class GitRepository:
             The file content as text.
 
         Raises:
-            ConfigNotFound: If the file does not exist at that revision.
+            ConfigNotFound: If the revision or the file does not exist.
         """
         try:
             commit = self._repo.commit(revision)
@@ -278,6 +302,11 @@ class GitRepository:
             )
             for commit in self._repo.iter_commits(revision, paths=relative_path)
         ]
+
+    def _conflicted_files(self) -> list[str]:
+        """Return the files Git marked as conflicted during a merge."""
+        output: str = self._repo.git.diff("--name-only", "--diff-filter=U")
+        return sorted(output.splitlines())
 
 
 def _find_enclosing_repository(path: Path) -> Path | None:

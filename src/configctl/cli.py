@@ -10,9 +10,9 @@ import click
 
 from configctl import __version__
 from configctl.config_parser import ConfigParser
-from configctl.exceptions import ConfigCtlError
+from configctl.exceptions import ConfigCtlError, MergeConflictError
 from configctl.git_repository import GitRepository
-from configctl.manager import ConfigManager
+from configctl.manager import DRAFT_PREFIX, ConfigManager
 
 
 @contextmanager
@@ -25,8 +25,29 @@ def _open_manager(repo_path: Path) -> Iterator[ConfigManager]:
     try:
         with GitRepository.open(repo_path) as repo:
             yield ConfigManager(repo, ConfigParser())
+    except MergeConflictError as error:
+        raise click.ClickException(_conflict_help(error, repo_path)) from error
     except ConfigCtlError as error:
         raise click.ClickException(str(error)) from error
+
+
+def _conflict_help(error: MergeConflictError, repo_path: Path) -> str:
+    """Explain a merge conflict and the Git steps that resolve it."""
+    draft_name = error.branch.removeprefix(DRAFT_PREFIX)
+    files = "\n".join(f"  - {name}" for name in error.conflicted_files)
+    return (
+        f"Cannot publish draft '{draft_name}': it conflicts with main in:\n"
+        f"{files}\n"
+        "\n"
+        "Nothing was changed on main. To resolve the conflict:\n"
+        f"  1. cd {repo_path}\n"
+        f"  2. git switch {error.branch}\n"
+        "  3. git merge main\n"
+        "  4. Edit each conflicted file: keep the values you want and delete\n"
+        "     the <<<<<<<, ======= and >>>>>>> marker lines\n"
+        "  5. git add <file>, then git commit\n"
+        f"  6. configctl --repo {repo_path} publish {draft_name}"
+    )
 
 
 def _parse_value(raw: str) -> Any:
