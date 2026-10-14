@@ -1,0 +1,4 @@
+# Runtime dependencies
+GitPython==3.2.0
+click==8.5.0
+PyYAML==6.0.3
