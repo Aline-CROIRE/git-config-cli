@@ -1,5 +1,6 @@
 """Business logic for drafting, publishing and rolling back configurations."""
 
+import logging
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -15,6 +16,8 @@ from configctl.exceptions import (
 )
 from configctl.git_repository import CommitInfo
 from configctl.protocols import ConfigFormat, VersionControl
+
+logger = logging.getLogger(__name__)
 
 MAIN_BRANCH = "main"
 DRAFT_PREFIX = "draft/"
@@ -72,10 +75,16 @@ class ConfigManager:
         """
         branch = self.draft_branch(name)
         self._repo.create_branch(branch, MAIN_BRANCH)
+        logger.info(
+            "Draft created",
+            extra={"action": "draft.create", "draft": name, "branch": branch},
+        )
         return branch
 
     def set_value(self, draft: str, filename: str, key: str, value: Any) -> str:
         """Set one value in a configuration file on a draft and commit it.
+
+        The value itself is never logged, because it may be a secret.
 
         Args:
             draft: The draft name.
@@ -96,7 +105,18 @@ class ConfigManager:
             data = self._load_or_empty(filename, branch)
             _set_nested(data, key, value)
             self._parser.write(path, data)
-            return self._repo.commit_files([filename], f"Set {key} in {filename}")
+            sha = self._repo.commit_files([filename], f"Set {key} in {filename}")
+        logger.info(
+            "Value set",
+            extra={
+                "action": "draft.set",
+                "draft": draft,
+                "config_file": filename,
+                "key": key,
+                "commit": sha,
+            },
+        )
+        return sha
 
     def show(self, filename: str, draft: str | None = None) -> ConfigData:
         """Return a configuration from ``main`` or from a draft.
@@ -135,7 +155,12 @@ class ConfigManager:
         """
         branch = self._existing_draft(draft)
         self._validate_draft(draft, branch)
-        return self._repo.merge(branch, MAIN_BRANCH, f"Publish {branch}")
+        sha = self._repo.merge(branch, MAIN_BRANCH, f"Publish {branch}")
+        logger.info(
+            "Draft published",
+            extra={"action": "draft.publish", "draft": draft, "commit": sha},
+        )
+        return sha
 
     def history(self, filename: str) -> list[CommitInfo]:
         """List the commits that changed a configuration on ``main``.
@@ -168,9 +193,19 @@ class ConfigManager:
         with self._on_branch(MAIN_BRANCH):
             old_content = self._repo.read_file(filename, revision)
             self._parser.write(path, self._parser.parse(old_content, filename))
-            return self._repo.commit_files(
+            sha = self._repo.commit_files(
                 [filename], f"Rollback {filename} to {revision}"
             )
+        logger.info(
+            "Configuration rolled back",
+            extra={
+                "action": "config.rollback",
+                "config_file": filename,
+                "revision": revision,
+                "commit": sha,
+            },
+        )
+        return sha
 
     def _validate_draft(self, draft: str, branch: str) -> None:
         """Raise InvalidConfigError if a config file changed on the draft is invalid."""

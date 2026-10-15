@@ -1,6 +1,7 @@
 """Command-line interface for configctl."""
 
 import json
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,18 +13,40 @@ from configctl import __version__
 from configctl.config_parser import ConfigParser
 from configctl.exceptions import ConfigCtlError, MergeConflictError
 from configctl.git_repository import GitRepository
+from configctl.logging_config import configure_logging, default_log_file
 from configctl.manager import DRAFT_PREFIX, ConfigManager
+
+_log = logging.getLogger(__name__)
 
 
 @contextmanager
 def _reported_errors(repo_path: Path | None = None) -> Iterator[None]:
-    """Turn configctl errors into clean ``Error: ...`` messages for the user."""
+    """Log configctl errors and turn them into clean ``Error: ...`` messages."""
+    command = click.get_current_context().info_name
     try:
         yield
     except MergeConflictError as error:
+        _log.warning(
+            "Publish blocked by merge conflict",
+            extra={
+                "action": "draft.publish",
+                "command": command,
+                "draft": error.branch,
+                "conflicted_files": error.conflicted_files,
+            },
+        )
         help_text = _conflict_help(error, repo_path or Path("."))
         raise click.ClickException(help_text) from error
     except ConfigCtlError as error:
+        _log.error(
+            "Command failed",
+            extra={
+                "action": "error",
+                "command": command,
+                "error_type": type(error).__name__,
+                "detail": str(error),
+            },
+        )
         raise click.ClickException(str(error)) from error
 
 
@@ -87,9 +110,19 @@ def _parse_value(raw: str) -> Any:
     envvar="CONFIGCTL_REPO",
     help="Folder of the configuration repository.",
 )
+@click.option(
+    "--log-file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    envvar="CONFIGCTL_LOG_FILE",
+    help="JSON Lines audit log. Default: ~/.configctl/audit.log",
+)
+@click.option("--verbose", "-v", is_flag=True, help="Print log messages too.")
 @click.pass_context
-def main(ctx: click.Context, repo_path: Path) -> None:
+def main(
+    ctx: click.Context, repo_path: Path, log_file: Path | None, verbose: bool
+) -> None:
     """Manage configuration files stored in a Git repository."""
+    configure_logging(log_file or default_log_file(), verbose=verbose)
     ctx.obj = repo_path
 
 
@@ -101,6 +134,10 @@ def main(ctx: click.Context, repo_path: Path) -> None:
 def init(repo_path: Path) -> None:
     """Create a new configuration repository at the --repo folder."""
     with _reported_errors(repo_path), GitRepository.init(repo_path) as repo:
+        _log.info(
+            "Repository initialized",
+            extra={"action": "repo.init", "repo": str(repo.root)},
+        )
         click.echo(f"Initialized configuration repository at {repo.root}")
 
 
@@ -110,6 +147,10 @@ def init(repo_path: Path) -> None:
 def clone(url: str, destination: Path) -> None:
     """Clone the configuration repository at URL into DESTINATION."""
     with _reported_errors(destination), GitRepository.clone(url, destination) as repo:
+        _log.info(
+            "Repository cloned",
+            extra={"action": "repo.clone", "url": url, "repo": str(repo.root)},
+        )
         click.echo(f"Cloned {url} into {repo.root}")
 
 
@@ -120,6 +161,7 @@ def remote(repo_path: Path, url: str) -> None:
     """Set URL as the remote (origin) that push sends configurations to."""
     with _open_repository(repo_path) as repo:
         repo.set_remote(url)
+    _log.info("Remote set", extra={"action": "repo.remote", "url": url})
     click.echo(f"Remote 'origin' set to {url}")
 
 
@@ -129,6 +171,10 @@ def push(repo_path: Path) -> None:
     """Push the published configurations on main to the remote."""
     with _open_repository(repo_path) as repo:
         repo.push()
+    _log.info(
+        "Main pushed to remote",
+        extra={"action": "repo.push", "remote": "origin", "branch": "main"},
+    )
     click.echo("Pushed main to origin")
 
 

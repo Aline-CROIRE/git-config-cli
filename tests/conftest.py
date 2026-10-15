@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from configctl.git_repository import GitRepository
+from configctl.logging_config import reset_logging
 
 
 @pytest.fixture(autouse=True)
@@ -14,6 +15,15 @@ def git_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     for role in ("AUTHOR", "COMMITTER"):
         monkeypatch.setenv(f"GIT_{role}_NAME", "Test User")
         monkeypatch.setenv(f"GIT_{role}_EMAIL", "test@example.com")
+
+
+@pytest.fixture(autouse=True)
+def audit_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """Send each test's audit log to a temporary file, never the home folder."""
+    log_file = tmp_path / "audit.log"
+    monkeypatch.setenv("CONFIGCTL_LOG_FILE", str(log_file))
+    yield log_file
+    reset_logging()
 
 
 @pytest.fixture
